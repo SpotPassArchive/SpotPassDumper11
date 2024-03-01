@@ -3,7 +3,7 @@
 #include <string.h>
 #include <3ds.h>
 
-#define ERR_EXIT(msg) { printf("%s: %08lX\n", msg, res); goto exit; }
+#include <disa.h>
 
 static const int bufsize = 0x10000;
 
@@ -19,16 +19,15 @@ static Result file_open_write(FS_Archive *archive, Handle *file, const char *pat
 	return FSUSER_OpenFile(file, *archive, fsMakePath(PATH_ASCII, path), FS_OPEN_CREATE | FS_OPEN_WRITE, 0);
 }
 
-
 static Result file_copy(Handle input, Handle output) {
 	u64 filesize = 0;
 	Result res = -1;
 	u8 *buf = (u8 *)malloc(bufsize);
 
-
 	if (!buf) return MAKERESULT(RL_FATAL, RS_INVALIDSTATE, RM_OS, RD_OUT_OF_MEMORY);
 
-	res = FSFILE_GetSize(input, &filesize);
+	if (R_FAILED(res = FSFILE_GetSize(input, &filesize))) goto bad_exit;
+	if (R_FAILED(res = FSFILE_SetSize(output, filesize))) goto bad_exit;
 
 #define MIN(x,y) ((x) < (y) ? (x) : (y))
 
@@ -56,7 +55,7 @@ static Result file_copy(Handle input, Handle output) {
 	res = 0;
 
 bad_exit:
-	free(buf);
+	if (buf) free(buf);
 	return res;
 #undef MIN
 }
@@ -76,6 +75,8 @@ static Result read_dir(Handle dir, FS_DirectoryEntry **ents, int max_count, u32 
 	return FSDIR_Read(dir, read, max_count, *ents);
 }
 
+#define ERR_EXIT(msg) { printf("\n\x1b[31m%s: %08lX\x1b[0m\n", msg, res); goto exit; }
+
 int main(int argc, char* argv[])
 {
 	fsInit();
@@ -91,7 +92,8 @@ int main(int argc, char* argv[])
 
 	Handle data = 0;
 	Handle disa_file = 0;
-	Handle out_sd_file = 0;
+	Handle out_disa = 0;
+	Handle out_pa = 0;
 
 	u32 read = 0;
 	Result res = -1;
@@ -136,29 +138,54 @@ int main(int argc, char* argv[])
 	if (R_FAILED(res = make_dir(&sdmc, "/spotpass_cache", true)))
 		ERR_EXIT("failed creating output directory");
 
-	if (R_FAILED(res = file_open_write(&sdmc, &out_sd_file, "/spotpass_cache/00000000")))
-		ERR_EXIT("failed opening sdmc:/spotpass_cache/00000000");
+	if (R_FAILED(res = file_open_write(&sdmc, &out_pa, "/spotpass_cache/partitionA.bin")))
+		ERR_EXIT("failed opening sdmc:/spotpass_cache/partitionA.bin");
 
-	if (R_FAILED(res = file_copy(disa_file, out_sd_file)))
+	u32 part_count = 0;
+
+	if (R_FAILED(res = disa_extract_partition_a(disa_file, out_pa, &part_count)))
 		ERR_EXIT("failed copying file to SD card");
+
+	printf("file dumped to: sd:/spotpass_cache/partitionA.bin\n\n");
+
+	printf("partition count: %ld\n", part_count);
+
+	if (part_count > 1) {
+		printf("\x1b[33m\nyou have partitionB!\x1b[0m\n\n");
+		if (R_FAILED(res = file_open_write(&sdmc, &out_disa, "/spotpass_cache/00000000")))
+			ERR_EXIT("failed opening sd:/spotpass_cache/00000000");
+
+		if (R_FAILED(res = file_copy(disa_file, out_disa)))
+			ERR_EXIT("failed copying file")
+
+		printf("file dumped to: sd:/spotpass_cache/00000000\n");
+
+		printf(
+			"\x1b[32m\n\nHaving partitionB is rare. Please get\n"
+			"in touch with us on Discord so that we\n"
+			"can analyze your data further:\n\n"
+			"\x1b[36mhttps://discord.gg/wxCEY8MHvh\x1b[0m\n\n");
+	}
 
 #undef ERR_EXIT
 
 	FSFILE_Close(disa_file);
-	FSFILE_Close(out_sd_file);
-	disa_file = out_sd_file = 0;
+	FSFILE_Close(out_pa);
+	FSFILE_Close(out_disa);
+	disa_file = out_pa = out_disa = 0;
 
 	FSUSER_CloseArchive(nand);
 	FSUSER_CloseArchive(sdmc);
 	nand = sdmc = 0;
 
-	printf("file dumped to: sd:/spotpass_cache/00000000\n");
+	printf("\x1b[32m\nCompleted successfully.\x1b[0m\n\n");
 
 exit:
 	if (ents) free(ents);
 	if (data) { FSDIR_Close(data); svcCloseHandle(data); }
 	if (disa_file) { FSDIR_Close(disa_file); svcCloseHandle(disa_file); }
-	if (out_sd_file) { FSDIR_Close(out_sd_file); svcCloseHandle(out_sd_file); }
+	if (out_pa) { FSDIR_Close(out_pa); svcCloseHandle(out_pa); }
+	if (out_disa) { FSDIR_Close(out_disa); svcCloseHandle(out_disa); }
 	if (nand) FSUSER_CloseArchive(nand);
 	if (sdmc) FSUSER_CloseArchive(sdmc);
 
