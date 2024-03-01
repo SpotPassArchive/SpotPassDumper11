@@ -96,7 +96,11 @@ int main(int argc, char* argv[])
 	u32 read = 0;
 	Result res = -1;
 
-	if (R_FAILED(res = mount_media(&nand, ARCHIVE_NAND_CTR_FS)) || R_FAILED(res = mount_media(&sdmc, ARCHIVE_SDMC)))
+
+	if (R_FAILED(res = mount_media(&nand, ARCHIVE_NAND_CTR_FS)))
+		ERR_EXIT("failed mounting nand");
+
+	if (R_FAILED(res = mount_media(&sdmc, ARCHIVE_SDMC)))
 		ERR_EXIT("failed mounting SD");
 
 	if (R_FAILED(res = open_dir(&nand, &data, u"/data")))
@@ -179,4 +183,3 @@ exit:
 	fsExit();
 	return 0;
 }
-
