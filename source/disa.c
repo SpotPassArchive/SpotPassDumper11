@@ -1,19 +1,11 @@
 #include <disa.h>
 
-static inline Result read_bit(Handle file, u8 *outval, u64 lvloff, u32 bit) {
-	u32 val, read;
-	Result ret = FSFILE_Read(file, &read, lvloff + 4 * (bit / 32), &val, 4);
-	if (R_FAILED(ret)) return ret;
-	*outval = (val >> (31 - (bit % 32))) & 1;
-	return ret;
+static inline u8 bit(u32 *bitarr, u32 bi) {
+	return (bitarr[bi / 32] >> (31 - (bi % 32))) & 1;
 }
 
-static inline Result read_bit_select(Handle file, u8 *outval, u64 lvloff, u32 bit, u64 lvlsize, u32 select) {
-	u32 val, read;
-	Result ret = FSFILE_Read(file, &read, (lvloff + (lvlsize * select)) + 4 * (bit / 32), &val, 4);
-	if (R_FAILED(ret)) return ret;
-	*outval = (val >> (31 - (bit % 32))) & 1;
-	return ret;
+static inline u8 bit_select(u32 *bitarr, u32 bi, u64 lvlsize, u8 select) {
+	return bit(&bitarr[select * lvlsize / 4], bi);
 }
 
 #define pow2(x) (1 << ((x)))
@@ -21,6 +13,7 @@ static inline Result read_bit_select(Handle file, u8 *outval, u64 lvloff, u32 bi
 
 Result disa_extract_partition_a(Handle disa, Handle out_pa, u32 *partition_count) {
 	u8 *buf = NULL, *dpfs_desc = NULL, *active_tbl = NULL;
+	u32 *lvl1 = NULL, *lvl2 = NULL;
 	u32 read = 0;
 
 	disa_header hdr;
@@ -52,6 +45,20 @@ Result disa_extract_partition_a(Handle disa, Handle out_pa, u32 *partition_count
 
 	dpfs_header *dpfs = (dpfs_header *)dpfs_desc;
 
+	// we can read lvl1 and lvl2 entirely; they shouldn't be that large
+	u64 actual_lv1_off = (hdr.pa_off + dpfs->lvl1.offset) + (difi->dpfs_lvl1_select * dpfs->lvl1.size);
+	u64 actual_lv2_off = hdr.pa_off + dpfs->lvl2.offset;
+
+	lvl1 = (u32 *)malloc(dpfs->lvl1.size * 2);
+
+	if (R_FAILED(res = FSFILE_Read(disa, &read, actual_lv1_off, lvl1, dpfs->lvl1.size * 2)))
+		ERR_EXIT("failed reading DPFS lvl1");
+
+	lvl2 = (u32 *)malloc(dpfs->lvl2.size * 2);
+
+	if (R_FAILED(res = FSFILE_Read(disa, &read, actual_lv2_off, lvl2, dpfs->lvl2.size * 2)))
+		ERR_EXIT("failed reading DPFS lvl2");
+
 	buf = (u8 *)malloc(pow2(dpfs->lvl3.log2_blocksize));
 
 	u64 pa_size = dpfs->lvl3.size - 0x9000;
@@ -67,17 +74,10 @@ Result disa_extract_partition_a(Handle disa, Handle out_pa, u32 *partition_count
 		u64 lvl2idx = lvl2bitidx / 8;
 		u64 lvl1bitidx = lvl2idx / pow2(dpfs->lvl2.log2_blocksize);
 
-		u64 actual_lv1_off = (hdr.pa_off + dpfs->lvl1.offset) + (difi->dpfs_lvl1_select * dpfs->lvl1.size);
-		u64 actual_lv2_off = hdr.pa_off + dpfs->lvl2.offset;
 		u64 actual_lv3_off = hdr.pa_off + dpfs->lvl3.offset;
 
-		u8 lv2_select;
-		if (R_FAILED(res = read_bit(disa, &lv2_select, actual_lv1_off, lvl1bitidx)))
-			ERR_EXIT("failed reading lv1 bit");
-
-		u8 lv3_select;
-		if (R_FAILED(res = read_bit_select(disa, &lv3_select, actual_lv2_off, lvl2bitidx, dpfs->lvl2.size, lv2_select)))
-			ERR_EXIT("failed reading lv2 bit");
+		u8 lv2_select = bit(lvl1, lvl1bitidx);
+		u8 lv3_select = bit_select(lvl2, lvl2bitidx, dpfs->lvl2.size, lv2_select);
 
 		if (R_FAILED(res = FSFILE_Read(disa, &read, (actual_lv3_off + (dpfs->lvl3.size * lv3_select)) + off, buf, pow2(dpfs->lvl3.log2_blocksize))))
 			ERR_EXIT("failed reading DISA lv3 data chunk");
@@ -95,6 +95,8 @@ exit:
 	if (buf) free(buf);
 	if (dpfs_desc) free(dpfs_desc);
 	if (active_tbl) free(active_tbl);
+	if (lvl1) free(lvl1);
+	if (lvl2) free(lvl2);
 	return res;
 }
 #undef pow2
