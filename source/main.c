@@ -36,7 +36,7 @@ static Result file_copy(Handle input, Handle output) {
 	u64 offset = 0;
 	u32 read = 0, written = 0;
 
-	printf("copying file... %lld/%lld bytes", offset, filesize);
+	printf("Copying file... %lld/%lld bytes", offset, filesize);
 
 	while (remain) {
 		Result res = FSFILE_Read(input, &read, offset, buf, to_read);
@@ -47,7 +47,7 @@ static Result file_copy(Handle input, Handle output) {
 		remain -= read;
 		offset += read;
 		to_read = MIN(bufsize, remain);
-		printf("\rcopying file... %lld/%lld bytes", offset, filesize);
+		printf("\rCopying file... %lld/%lld bytes", offset, filesize);
 	}
 
 	printf("\n");
@@ -100,19 +100,19 @@ int main(int argc, char* argv[])
 
 
 	if (R_FAILED(res = mount_media(&nand, ARCHIVE_NAND_CTR_FS)))
-		ERR_EXIT("failed mounting nand");
+		ERR_EXIT("Failed mounting nand.");
 
 	if (R_FAILED(res = mount_media(&sdmc, ARCHIVE_SDMC)))
-		ERR_EXIT("failed mounting SD");
+		ERR_EXIT("Failed mounting SD.");
 
 	if (R_FAILED(res = open_dir(&nand, &data, u"/data")))
-		ERR_EXIT("failed opening nand:/data");
+		ERR_EXIT("Failed opening nand:/data");
 
 	if (R_FAILED(res = read_dir(data, &ents, 4, &read)))
-		ERR_EXIT("failed listing contents of nand:/data");
+		ERR_EXIT("Failed listing contents of nand:/data");
 
 	if (R_FAILED(res = FSDIR_Close(data)))
-		ERR_EXIT("failed closing directory");
+		ERR_EXIT("Failed closing directory.");
 	data = 0;
 
 	if (read) {
@@ -132,37 +132,37 @@ int main(int argc, char* argv[])
 	if (ents) { free(ents); ents = NULL; }
 
 	if (!found_id0) {
-		printf("could not find id0 on nand.\n"); // this should never happen
+		printf("Could not find id0 on nand.\n"); // this should never happen
 		goto exit;
 	}
 
 	if (R_FAILED(res = file_open(&nand, &disa_file, buf)))
-		ERR_EXIT("failed opening BOSS DISA file for reading");
+		ERR_EXIT("Failed opening BOSS DISA file for reading.");
 
 	if (R_FAILED(res = make_dir(&sdmc, "/spotpass_cache", true)))
-		ERR_EXIT("failed creating output directory");
+		ERR_EXIT("Failed creating output directory on SD card. Make sure SD card is not set to read-only.");
 
 	if (R_FAILED(res = file_open_write(&sdmc, &out_pa, "/spotpass_cache/partitionA.bin")))
-		ERR_EXIT("failed opening sdmc:/spotpass_cache/partitionA.bin");
+		ERR_EXIT("Failed opening sdmc:/spotpass_cache/partitionA.bin");
 
 	u32 part_count = 0;
 
 	if (R_FAILED(res = disa_extract_partition_a(disa_file, out_pa, &part_count)))
-		ERR_EXIT("failed copying file to SD card");
+		ERR_EXIT("Failed copying file to SD card. Make sure SD card is not set to read-only.");
 
-	printf("file dumped to: sd:/spotpass_cache/partitionA.bin\n\n");
+	printf("File dumped to: sd:/spotpass_cache/partitionA.bin\n\n");
 
-	printf("partition count: %ld\n", part_count);
+	printf("Partition count: %ld\n", part_count);
 
 	if (part_count > 1) {
-		printf("\x1b[33m\nyou have partitionB!\x1b[0m\n\n");
+		printf("\x1b[33m\nYou have partitionB!\x1b[0m\n\n");
 		if (R_FAILED(res = file_open_write(&sdmc, &out_disa, "/spotpass_cache/00000000")))
-			ERR_EXIT("failed opening sd:/spotpass_cache/00000000");
+			ERR_EXIT("Failed opening sd:/spotpass_cache/00000000");
 
 		if (R_FAILED(res = file_copy(disa_file, out_disa)))
-			ERR_EXIT("failed copying file")
+			ERR_EXIT("Failed copying file to SD card. Make sure SD card is not set to read-only.")
 
-		printf("file dumped to: sd:/spotpass_cache/00000000\n");
+		printf("File dumped to: sd:/spotpass_cache/00000000\n");
 
 		printf(
 			"\x1b[32m\n\nHaving partitionB is rare. Please get\n"
@@ -193,7 +193,7 @@ exit:
 	if (nand) FSUSER_CloseArchive(nand);
 	if (sdmc) FSUSER_CloseArchive(sdmc);
 
-	printf("press START to exit\n");
+	printf("Press START to exit\n");
 
 	while (aptMainLoop())
 	{
