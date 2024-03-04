@@ -76,13 +76,13 @@ Result upload_partition_a(Handle file) {
 	TR((upload_buffer = (u8 *)malloc(UL_BUFSIZE)) ? 0 : UOOM, "Out of memory"); // this should *not* happen
 
 	TRE(httpcOpenContext(&ctx, HTTPC_METHOD_POST, SERVER_URL "/upload/ctr/partition-a", 1), "Failed opening http:c context", err2);
-	TRE(httpcAddRequestHeaderField(&ctx, "content-length", contentlength), "Failed setting content-length", err1);
+	TRE(httpcAddRequestHeaderField(&ctx, "X-PA-Length", contentlength), "Failed setting content-length", err1);
 	TRE(httpcSetPostDataType(&ctx, 2), "Failed setting POST data type", err1);
 	TRE(httpcBeginRequest(&ctx), "Failed beginning HTTP request", err1);
 
 	u32 sent = 0, remaining = (u32)size, to_send = MIN((u32)size, UL_BUFSIZE);
 
-	printf("Uploading partitionA.bin... (%.02f%%)", (float)sent / (u32)size * 100.0f);
+	printf("Uploading partitionA.bin... (%.02f%%)     ", (float)sent / (u32)size * 100.0f);
 
 	while (remaining) {
 		TRE(FSFILE_Read(file, &_rd, sent, upload_buffer, to_send), "\nFailed reading file into memory", err2);
@@ -94,7 +94,7 @@ Result upload_partition_a(Handle file) {
 		to_send = MIN(remaining, 512 * 1024);
 		gspWaitForVBlank();
 		gfxSwapBuffers();
-		printf("\rUploading partitionA.bin... (%.02f%%)", (float)sent / (u32)size * 100.0f);
+		printf("\rUploading partitionA.bin... (%.02f%%)     ", (float)sent / (u32)size * 100.0f);
 	}
 
 	printf("\n");
