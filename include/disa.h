@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+#include <util.h>
+
 typedef struct disa_header  {
 	char magic[4];
 	u32 magic2;

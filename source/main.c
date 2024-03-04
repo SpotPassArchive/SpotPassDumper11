@@ -4,6 +4,8 @@
 #include <3ds.h>
 
 #include <disa.h>
+#include <upload.h>
+#include <util.h>
 
 static const int bufsize = 0x10000;
 
@@ -75,14 +77,25 @@ static Result read_dir(Handle dir, FS_DirectoryEntry **ents, int max_count, u32 
 	return FSDIR_Read(dir, read, max_count, *ents);
 }
 
-#define ERR_EXIT(msg) { printf("\n\x1b[31m%s: %08lX\x1b[0m\n", msg, res); goto exit; }
+#define T(x,msg) TRE((x), msg, exit);
 
-int main(int argc, char* argv[])
-{
-	fsInit();
-	gfxInitDefault();
-	consoleInit(GFX_TOP, NULL);
+static Result upload_dump(Handle file) {
+	Result res = 0xE7E3FFFF;
 
+	T(upload_init(), "Failed initializing upload");
+	printf("Connecting to the internet...\n");
+	T(upload_connect(), "Failed connecting to wifi");
+	T(upload_conn_test(), "Internet connectivity is not present");
+	T(upload_partition_a(file), "Failed uploading dump");
+
+	printf("\x1b[32m\nFile uploaded successfully. Thank you!\x1b[0m\n\n");
+
+exit:
+	upload_exit();
+	return res;
+}
+
+static Result dump_boss_data() {
 	bool found_id0 = false;
 	char buf[65];
 
@@ -96,23 +109,14 @@ int main(int argc, char* argv[])
 	Handle out_pa = 0;
 
 	u32 read = 0;
-	Result res = -1;
+	Result res = 0xE7E3FFFF;
 
+	T(mount_media(&nand, ARCHIVE_NAND_CTR_FS), "Failed mounting nand");
+	T(mount_media(&sdmc, ARCHIVE_SDMC), "Failed mounting SD");
+	T(open_dir(&nand, &data, u"/data"), "Failed opening nand:/data");
+	T(read_dir(data, &ents, 4, &read), "Failed listing contents of nand:/data");
+	T(FSDIR_Close(data), "Failed closing directory");
 
-	if (R_FAILED(res = mount_media(&nand, ARCHIVE_NAND_CTR_FS)))
-		ERR_EXIT("Failed mounting nand.");
-
-	if (R_FAILED(res = mount_media(&sdmc, ARCHIVE_SDMC)))
-		ERR_EXIT("Failed mounting SD.");
-
-	if (R_FAILED(res = open_dir(&nand, &data, u"/data")))
-		ERR_EXIT("Failed opening nand:/data");
-
-	if (R_FAILED(res = read_dir(data, &ents, 4, &read)))
-		ERR_EXIT("Failed listing contents of nand:/data");
-
-	if (R_FAILED(res = FSDIR_Close(data)))
-		ERR_EXIT("Failed closing directory.");
 	data = 0;
 
 	if (read) {
@@ -136,31 +140,30 @@ int main(int argc, char* argv[])
 		goto exit;
 	}
 
-	if (R_FAILED(res = file_open(&nand, &disa_file, buf)))
-		ERR_EXIT("Failed opening BOSS DISA file for reading.");
-
-	if (R_FAILED(res = make_dir(&sdmc, "/spotpass_cache", true)))
-		ERR_EXIT("Failed creating output directory on SD card. Make sure SD card is not set to read-only.");
-
-	if (R_FAILED(res = file_open_write(&sdmc, &out_pa, "/spotpass_cache/partitionA.bin")))
-		ERR_EXIT("Failed opening sdmc:/spotpass_cache/partitionA.bin");
+	T(file_open(&nand, &disa_file, buf), "Failed opening BOSS DISA file for reading");
+	T(make_dir(&sdmc, "/spotpass_cache", true), "Failed creating output directory on SD card. Make sure SD card is not set to read-only");
+	T(file_open_write(&sdmc, &out_pa, "/spotpass_cache/partitionA.bin"), "Failed opening sd:/spotpass_cache/partitionA.bin");
 
 	u32 part_count = 0;
 
-	if (R_FAILED(res = disa_extract_partition_a(disa_file, out_pa, &part_count)))
-		ERR_EXIT("Failed copying file to SD card. Make sure SD card is not set to read-only.");
+	T(disa_extract_partition_a(disa_file, out_pa, &part_count), "Failed copying file to SD card. Make sure SD card is not set to read-only");
 
+	printf("\x1b[32m\nCompleted successfully.\x1b[0m\n\n");
 	printf("File dumped to: sd:/spotpass_cache/partitionA.bin\n\n");
+
+	// try uploading the file
+	printf("Attempting to upload...\n");
+
+	if (R_FAILED(upload_dump(out_pa)))
+		printf("\x1b[31m\nFailed uploading file. Please upload it\nyourself using the website.\x1b[0m\n\n");
 
 	printf("Partition count: %ld\n", part_count);
 
 	if (part_count > 1) {
 		printf("\x1b[33m\nYou have partitionB!\x1b[0m\n\n");
-		if (R_FAILED(res = file_open_write(&sdmc, &out_disa, "/spotpass_cache/00000000")))
-			ERR_EXIT("Failed opening sd:/spotpass_cache/00000000");
 
-		if (R_FAILED(res = file_copy(disa_file, out_disa)))
-			ERR_EXIT("Failed copying file to SD card. Make sure SD card is not set to read-only.")
+		T(file_open_write(&sdmc, &out_disa, "/spotpass_cache/00000000"), "Failed opening sd:/spotpass_cache/00000000");
+		T(file_copy(disa_file, out_disa), "Failed copying file to SD card. Make sure SD card is not set to read-only")
 
 		printf("File dumped to: sd:/spotpass_cache/00000000\n");
 
@@ -171,8 +174,6 @@ int main(int argc, char* argv[])
 			"\x1b[36mhttps://discord.gg/wxCEY8MHvh\x1b[0m\n\n");
 	}
 
-#undef ERR_EXIT
-
 	FSFILE_Close(disa_file);
 	FSFILE_Close(out_pa);
 	FSFILE_Close(out_disa);
@@ -182,18 +183,26 @@ int main(int argc, char* argv[])
 	FSUSER_CloseArchive(sdmc);
 	nand = sdmc = 0;
 
-	printf("\x1b[32m\nCompleted successfully.\x1b[0m\n\n");
-
 exit:
 	if (ents) free(ents);
 	if (data) { FSDIR_Close(data); svcCloseHandle(data); }
-	if (disa_file) { FSDIR_Close(disa_file); svcCloseHandle(disa_file); }
-	if (out_pa) { FSDIR_Close(out_pa); svcCloseHandle(out_pa); }
-	if (out_disa) { FSDIR_Close(out_disa); svcCloseHandle(out_disa); }
+	if (disa_file) { FSFILE_Close(disa_file); }
+	if (out_pa) { FSFILE_Close(out_pa); }
+	if (out_disa) { FSFILE_Close(out_disa); }
 	if (nand) FSUSER_CloseArchive(nand);
 	if (sdmc) FSUSER_CloseArchive(sdmc);
 
-	printf("Press START to exit\n");
+	return res;
+}
+
+int main(int argc, char* argv[])
+{
+	fsInit();
+	gfxInitDefault();
+	consoleInit(GFX_TOP, NULL);
+
+	// TODO: detect existing file, upload, redump, upload again
+	dump_boss_data();
 
 	while (aptMainLoop())
 	{
