@@ -15,7 +15,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: SpotPassDumper11.zip
+          name: SpotPassDumper11
           path: |
            SpotPassDumper11.3dsx
            SpotPassDumper11.smdh
