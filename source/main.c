@@ -199,7 +199,7 @@ int main(int argc, char* argv[])
 {
 	fsInit();
 	gfxInitDefault();
-	consoleInit(GFX_TOP, NULL);
+	consoleInit(GFX_BOTTOM, NULL);
 
 	// TODO: detect existing file, upload, redump, upload again
 	dump_boss_data();
