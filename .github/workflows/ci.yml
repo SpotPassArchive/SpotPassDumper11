@@ -23,9 +23,8 @@ jobs:
 
       - uses: actions/upload-artifact@v2
         with:
-          name: SpotPassDumper11.3dsx
-          path: .
-          if-no-files-found: error
-          name: SpotPassDumper11.smdh
-          path: .
+          name: SpotPassDumper11
+          path: |
+           SpotPassDumper11.3dsx
+           SpotPassDumper11.smdh
           if-no-files-found: error
