@@ -21,9 +21,9 @@ jobs:
       - name: Build Project
         run: make
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v4
         with:
-          name: SpotPassDumper11
+          name: SpotPassDumper11.zip
           path: |
            SpotPassDumper11.3dsx
            SpotPassDumper11.smdh
