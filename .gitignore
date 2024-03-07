@@ -1,4 +1,5 @@
 build/*
+.ccls-cache/*
 *.3dsx
 *.cia
 *.elf

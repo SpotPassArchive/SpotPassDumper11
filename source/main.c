@@ -3,56 +3,55 @@
 #include <string.h>
 #include <3ds.h>
 
+#include <malloc.h>
+
 #include <disa.h>
 #include <upload.h>
 #include <util.h>
 
-static const int bufsize = 0x10000;
+#define T(x,msg) TRE((x), msg, exit);
+
+#define DUMP_OUTPATH "/spotpass_cache"
+#define FILE_COPY_BUFSIZE 0x10000
 
 static Result mount_media(FS_Archive *archive, u32 archive_id) {
 	return FSUSER_OpenArchive(archive, archive_id, fsMakePath(PATH_EMPTY, ""));
 }
 
-static Result file_open(FS_Archive *archive, Handle *file, const char *path) {
-	return FSUSER_OpenFile(file, *archive, fsMakePath(PATH_ASCII, path), FS_OPEN_READ, 0);
-}
-
-static Result file_open_write(FS_Archive *archive, Handle *file, const char *path) {
-	return FSUSER_OpenFile(file, *archive, fsMakePath(PATH_ASCII, path), FS_OPEN_CREATE | FS_OPEN_WRITE, 0);
+static Result file_open(FS_Archive *archive, Handle *file, const char *path, bool write) {
+	u32 open_flags = write ? FS_OPEN_CREATE | FS_OPEN_WRITE : FS_OPEN_READ;
+	return FSUSER_OpenFile(file, *archive, fsMakePath(PATH_ASCII, path), open_flags, 0);
 }
 
 static Result file_copy(Handle input, Handle output) {
 	u64 filesize = 0;
 	Result res = -1;
-	u8 *buf = (u8 *)malloc(bufsize);
+	u8 *buf = NULL;
 
-	if (!buf) return MAKERESULT(RL_FATAL, RS_INVALIDSTATE, RM_OS, RD_OUT_OF_MEMORY);
+	if (!(buf = (u8 *)malloc(FILE_COPY_BUFSIZE)))
+		return MAKERESULT(RL_FATAL, RS_INVALIDSTATE, RM_OS, RD_OUT_OF_MEMORY);
 
 	if (R_FAILED(res = FSFILE_GetSize(input, &filesize))) goto bad_exit;
 	if (R_FAILED(res = FSFILE_SetSize(output, filesize))) goto bad_exit;
 
-#define MIN(x,y) ((x) < (y) ? (x) : (y))
-
 	u64 remain = filesize;
-	u64 to_read = MIN(bufsize, remain);
+	u64 to_read = MIN(FILE_COPY_BUFSIZE, remain);
 	u64 offset = 0;
 	u32 read = 0, written = 0;
 
-	printf("Copying file... %lld/%lld bytes", offset, filesize);
+	printf("Copying file... (" CONSOLE_YELLOW "%.02f%%" CONSOLE_RESET ")", PERCENTAGE(offset, filesize));
 
 	while (remain) {
-		Result res = FSFILE_Read(input, &read, offset, buf, to_read);
-		if (R_FAILED(res)) goto bad_exit;
-		res = FSFILE_Write(output, &written, offset, buf, read, FS_WRITE_FLUSH);
-		if (R_FAILED(res)) goto bad_exit;
+		if (R_FAILED(res = FSFILE_Read(input, &read, offset, buf, to_read))) goto bad_exit;
+		if (R_FAILED(res = FSFILE_Write(output, &written, offset, buf, read, FS_WRITE_FLUSH))) goto bad_exit;
 
 		remain -= read;
 		offset += read;
-		to_read = MIN(bufsize, remain);
-		printf("\rCopying file... %lld/%lld bytes", offset, filesize);
+		to_read = MIN(FILE_COPY_BUFSIZE, remain);
+		printf("\rCopying file... (" CONSOLE_YELLOW "%.02f%%" CONSOLE_RESET ")", PERCENTAGE(offset, filesize));
 	}
 
-	printf("\n");
+	putchar('\n');
 
 	res = 0;
 
@@ -77,25 +76,29 @@ static Result read_dir(Handle dir, FS_DirectoryEntry **ents, int max_count, u32 
 	return FSDIR_Read(dir, read, max_count, *ents);
 }
 
-#define T(x,msg) TRE((x), msg, exit);
 
 static Result upload_dump(Handle file) {
 	Result res = 0xE7E3FFFF;
 
 	T(upload_init(), "Failed initializing upload");
-	printf("Connecting to the internet...\n");
+	puts("Connecting to the internet...");
+	bool disable_sslverify = false;
 	T(upload_connect(), "Failed connecting to wifi");
-	T(upload_conn_test(), "Internet connectivity is not present");
-	T(upload_partition_a(file), "Failed uploading dump");
+	if (R_FAILED(res = upload_conn_test(disable_sslverify))) {
+		if (res == UL_RES(UCURL_ERROR) && upload_get_err() == CURLE_PEER_FAILED_VERIFICATION)
+		{ T(upload_conn_test(disable_sslverify = true), "Internet connectivity not present"); }
+		else ERR_EXIT("Internet connectivity not present", exit);
+	}
+	T(upload_send_partition_a(file, disable_sslverify), "Failed uploading dump");
 
-	printf("\x1b[32m\nFile uploaded successfully. Thank you!\x1b[0m\n\n");
+	puts("\n" CONSOLE_GREEN "File uploaded successfully. Thank you!" CONSOLE_RESET);
 
 exit:
 	upload_exit();
 	return res;
 }
 
-static Result dump_boss_data() {
+static void dump_and_upload() {
 	bool found_id0 = false;
 	char buf[65];
 
@@ -125,7 +128,7 @@ static Result dump_boss_data() {
 		for (int i = 0; i < read; i++) {
 			int r = utf16_to_utf8((uint8_t *)&utf8, ents[i].name, 33);
 			if (r == 32) {
-				printf("your ID0: %s\n", utf8);
+				printf("ID0: " CONSOLE_MAGENTA "%s" CONSOLE_RESET "\n\n", utf8);
 				snprintf(buf, sizeof(buf), "/data/%s/sysdata/00010034/00000000", utf8);
 				found_id0 = true;
 				break;
@@ -136,42 +139,47 @@ static Result dump_boss_data() {
 	if (ents) { free(ents); ents = NULL; }
 
 	if (!found_id0) {
-		printf("Could not find id0 on nand.\n"); // this should never happen
+		puts("Could not find ID0 on NAND."); // this should never happen
 		goto exit;
 	}
 
-	T(file_open(&nand, &disa_file, buf), "Failed opening BOSS DISA file for reading");
-	T(make_dir(&sdmc, "/spotpass_cache", true), "Failed creating output directory on SD card. Make sure SD card is not set to read-only");
-	T(file_open_write(&sdmc, &out_pa, "/spotpass_cache/partitionA.bin"), "Failed opening sd:/spotpass_cache/partitionA.bin");
+	T(file_open(&nand, &disa_file, buf, false), "Failed opening BOSS DISA file for\nreading");
+	T(make_dir(&sdmc, DUMP_OUTPATH, true), "Failed creating output directory on\nSD card. Make sure SD card is not set\nto read-only");
+	T(file_open(&sdmc, &out_pa, DUMP_OUTPATH "/partitionA.bin", true), "Failed opening:\nsd:" DUMP_OUTPATH "/partitionA.bin");
 
 	u32 part_count = 0;
 
-	T(disa_extract_partition_a(disa_file, out_pa, &part_count), "Failed copying file to SD card. Make sure SD card is not set to read-only");
+	T(disa_extract_partition_a(disa_file, out_pa, &part_count), "Failed copying file to SD card. Make\nsure SD card is not set to\nread-only");
 
-	printf("\x1b[32m\nCompleted successfully.\x1b[0m\n\n");
-	printf("File dumped to: sd:/spotpass_cache/partitionA.bin\n\n");
+	printf("DISA partition count: %ld\n", part_count);
+
+	puts("\n" CONSOLE_GREEN "Copied successfully." CONSOLE_RESET "\n");
+	puts("File dumped to:\n" CONSOLE_CYAN "sd:" DUMP_OUTPATH "/partitionA.bin" CONSOLE_RESET "\n");
 
 	// try uploading the file
-	printf("Attempting to upload...\n");
+	puts("Attempting to upload dump...");
 
-	if (R_FAILED(upload_dump(out_pa)))
-		printf("\x1b[31m\nFailed uploading file. Please upload it\nyourself using the website.\x1b[0m\n\n");
-
-	printf("Partition count: %ld\n", part_count);
+	if (R_FAILED(upload_dump(out_pa))) {
+		puts("\n" CONSOLE_RED "Failed uploading file. Please upload it\nyourself using the website." CONSOLE_RESET "\n\n");
+		if (res == UL_RES(UCURL_ERROR))
+			printf(CONSOLE_RED "CURL error information:\n%s" CONSOLE_RESET "\n", curl_easy_strerror(upload_get_err()));
+	}
 
 	if (part_count > 1) {
-		printf("\x1b[33m\nYou have partitionB!\x1b[0m\n\n");
+		puts("\n" CONSOLE_YELLOW "You have partitionB!" CONSOLE_RESET "\n");
 
-		T(file_open_write(&sdmc, &out_disa, "/spotpass_cache/00000000"), "Failed opening sd:/spotpass_cache/00000000");
-		T(file_copy(disa_file, out_disa), "Failed copying file to SD card. Make sure SD card is not set to read-only")
+		T(file_open(&sdmc, &out_disa, DUMP_OUTPATH "/00000000", true), "Failed opening:\nsd:" DUMP_OUTPATH "/00000000");
+		T(file_copy(disa_file, out_disa), "Failed copying file to SD card. Make\nsure SD card is not set to\nread-only")
 
-		printf("File dumped to: sd:/spotpass_cache/00000000\n");
+		puts("File dumped to:\n" CONSOLE_CYAN "sd:" DUMP_OUTPATH "/00000000" CONSOLE_RESET);
 
-		printf(
-			"\x1b[32m\n\nHaving partitionB is rare. Please get\n"
+		puts(
+			"\n\n" CONSOLE_GREEN
+			"Having partitionB is rare. Please get\n"
 			"in touch with us on Discord so that we\n"
 			"can analyze your data further:\n\n"
-			"\x1b[36mhttps://discord.gg/wxCEY8MHvh\x1b[0m\n\n");
+			CONSOLE_CYAN "https://discord.gg/wxCEY8MHvh"
+			CONSOLE_RESET "\n\n");
 	}
 
 	FSFILE_Close(disa_file);
@@ -191,18 +199,56 @@ exit:
 	if (out_disa) { FSFILE_Close(out_disa); }
 	if (nand) FSUSER_CloseArchive(nand);
 	if (sdmc) FSUSER_CloseArchive(sdmc);
+}
 
-	return res;
+static void handle_existing_dump(bool *should_continue) {
+	Result res = 0xE7E3FFFF;
+	Handle existing = 0;
+	u64 file_size = 0;
+	u32 read = 0;
+
+	if (R_FAILED(res = FSUSER_OpenFileDirectly(&existing, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, ""), fsMakePath(PATH_ASCII, DUMP_OUTPATH "/partitionA.bin"), FS_OPEN_READ, 0))) {
+		*should_continue = true;
+		goto exit; /* no existing file */
+	}
+
+	T(FSFILE_GetSize(existing, &file_size), "Failed getting size of existing\ndump");
+	if (file_size != PARTITIONA_SIZE) {
+		*should_continue = true;
+		goto exit; /* the file is not the correct size */
+	}
+
+	char magic[4];
+	T(FSFILE_Read(existing, &read, 0, magic, 4), "Failed reading magic from\nexisting dump");
+	if (memcmp(magic, "SAVE", 4) != 0) {
+		*should_continue = true;
+		goto exit; /* the file does not have the correct magic */
+	}
+
+	puts("Uploading existing dump...\n");
+	res = upload_dump(existing);
+	*should_continue = R_SUCCEEDED(res);
+	T(res, "Failed uploading existing dump");
+	puts("\n========================================");
+exit:
+	if (existing) FSFILE_Close(existing);
 }
 
 int main(int argc, char* argv[])
 {
 	fsInit();
 	gfxInitDefault();
-	consoleInit(GFX_TOP, NULL);
+	consoleInit(GFX_BOTTOM, NULL);
 
-	// TODO: detect existing file, upload, redump, upload again
-	dump_boss_data();
+	bool should_continue = false;
+	handle_existing_dump(&should_continue);
+
+	if (!should_continue)
+		puts(CONSOLE_YELLOW "Failed processing existing dump.\nWill not continue." CONSOLE_RESET);
+	else 
+		dump_and_upload();
+	
+	puts("\n\nPress START to exit.");
 
 	while (aptMainLoop())
 	{
@@ -219,3 +265,5 @@ int main(int argc, char* argv[])
 	fsExit();
 	return 0;
 }
+
+#undef T

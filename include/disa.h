@@ -1,5 +1,5 @@
-#ifndef _sd11_disa_h
-#define _sd11_disa_h
+#ifndef sd11_disa_h
+#define sd11_disa_h
 
 #include <3ds.h>
 
@@ -8,6 +8,8 @@
 #include <stdio.h>
 
 #include <util.h>
+
+#define PARTITIONA_SIZE 4153344
 
 typedef struct disa_header  {
 	char magic[4];

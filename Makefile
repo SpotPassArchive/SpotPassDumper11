@@ -1,233 +1,101 @@
-#---------------------------------------------------------------------------------
 .SUFFIXES:
-#---------------------------------------------------------------------------------
 
-ifeq ($(strip $(DEVKITARM)),)
-$(error "Please set DEVKITARM in your environment. export DEVKITARM=<path to>devkitARM")
-endif
+SHELL := /usr/bin/env bash
+DEVKITPRO	:=	/opt/devkitpro
 
-TOPDIR ?= $(CURDIR)
-include $(DEVKITARM)/3ds_rules
+PATH	:=	$(DEVKITPRO)/tools/bin:$(DEVKITPRO)/devkitARM/bin:$(DEVKITPRO)/portlibs/3ds/bin:$(PATH)
 
-#---------------------------------------------------------------------------------
-# TARGET is the name of the output
-# BUILD is the directory where object files & intermediate files will be placed
-# SOURCES is a list of directories containing source code
-# DATA is a list of directories containing data files
-# INCLUDES is a list of directories containing header files
-# GRAPHICS is a list of directories containing graphics files
-# GFXBUILD is the directory where converted graphics files will be placed
-#   If set to $(BUILD), it will statically link in the converted
-#   files as if they were data files.
-#
-# NO_SMDH: if set to anything, no SMDH file is generated.
-# ROMFS is the directory which contains the RomFS, relative to the Makefile (Optional)
-# APP_TITLE is the name of the app stored in the SMDH file (Optional)
-# APP_DESCRIPTION is the description of the app stored in the SMDH file (Optional)
-# APP_AUTHOR is the author of the app stored in the SMDH file (Optional)
-# ICON is the filename of the icon (.png), relative to the project folder.
-#   If not set, it attempts to use one of the following (in this order):
-#     - <Project name>.png
-#     - icon.png
-#     - <libctru folder>/default_icon.png
-#---------------------------------------------------------------------------------
-TARGET		:=	$(notdir $(CURDIR))
+CC	:=	arm-none-eabi-gcc
+LD	:=	$(CC)
+CXX	:=	arm-none-eabi-g++
+AS	:=	arm-none-eabi-as
+AR	:=	arm-none-eabi-gcc-ar
+OBJCOPY	:=	arm-none-eabi-objcopy
+STRIP	:=	arm-none-eabi-strip
+NM	:=	arm-none-eabi-gcc-nm
+RANLIB	:=	arm-none-eabi-gcc-ranlib
+
+TARGET		:=	SpotPassDumper11
 BUILD		:=	build
 SOURCES		:=	source
 DATA		:=	data
-INCLUDES	:=	include
-GRAPHICS	:=	gfx
-GFXBUILD	:=	$(BUILD)
+
 ICON		:=	icon.png
 APP_TITLE	:=	SpotPassDumper11
 APP_DESCRIPTION :=	Extracts SpotPass cache data.
 APP_AUTHOR	:= ZeroSkill
-#ROMFS		:=	romfs
-#GFXBUILD	:=	$(ROMFS)/gfx
 
-#---------------------------------------------------------------------------------
-# options for code generation
-#---------------------------------------------------------------------------------
+APP_VER_MAJ	:= 1
+APP_VER_MIN	:= 0
+APP_VER_MIC	:= 0
+
 ARCH	:=	-march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft
+CFLAGS	:=	-g -Wall -O2 -mword-relocations -ffunction-sections $(ARCH)
 
-CFLAGS	:=	-g -Wall -O2 -mword-relocations \
-			-ffunction-sections \
-			$(ARCH)
+ASFLAGS	:=	-g $(ARCH)
+LDFLAGS	=	-specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(BUILD)/$(TARGET).map -z execstack
+
+LIBS	:=  -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lz -lctru
+LIBPATHS	:= $(DEVKITPRO)/libctru/lib $(DEVKITPRO)/portlibs/3ds/lib
+LIBFLAGS	:= $(foreach lib,$(LIBPATHS),-L$(lib))
+
+ROOT_DIR:=$(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
+OUTPUT	:=	$(ROOT_DIR)/$(TARGET)
+
+VPATH	:=	$(foreach dir,$(SOURCES),$(ROOT_DIR)/$(dir)) \
+					$(foreach dir,$(DATA),$(ROOT_DIR)/$(dir))
+
+CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
+SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
+BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
+
+OFILES_SOURCES 	:=	$(CFILES:.c=.o)
+OFILES_BIN	:=	$(addsuffix .o,$(BINFILES))
+OFILES	:= $(foreach ofile,$(OFILES_BIN) $(OFILES_SOURCES),$(BUILD)/$(ofile))
+HFILES	:=	$(addsuffix .h,$(subst .,_,$(BINFILES)))
+INCLUDE	:=	-Iinclude \
+			-I$(ROOT_DIR)/$(BUILD) \
+			-I$(DEVKITPRO)/libctru/include \
+			-I$(DEVKITPRO)/portlibs/3ds/include
 
 CFLAGS	+=	$(INCLUDE) -D__3DS__
 
-CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++11
+.PHONY: all clean cia
 
-ASFLAGS	:=	-g $(ARCH)
-LDFLAGS	=	-specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
+all: $(OUTPUT).3dsx
+cia: $(OUTPUT).cia
 
-LIBS	:= -lctru -lm
-
-#---------------------------------------------------------------------------------
-# list of directories containing libraries, this must be the top level containing
-# include and lib
-#---------------------------------------------------------------------------------
-LIBDIRS	:= $(CTRULIB)
-
-
-#---------------------------------------------------------------------------------
-# no real need to edit anything past this point unless you need to add additional
-# rules for different file extensions
-#---------------------------------------------------------------------------------
-ifneq ($(BUILD),$(notdir $(CURDIR)))
-#---------------------------------------------------------------------------------
-
-export OUTPUT	:=	$(CURDIR)/$(TARGET)
-export TOPDIR	:=	$(CURDIR)
-
-export VPATH	:=	$(foreach dir,$(SOURCES),$(CURDIR)/$(dir)) \
-			$(foreach dir,$(GRAPHICS),$(CURDIR)/$(dir)) \
-			$(foreach dir,$(DATA),$(CURDIR)/$(dir))
-
-export DEPSDIR	:=	$(CURDIR)/$(BUILD)
-
-CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
-CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
-SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
-PICAFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.v.pica)))
-SHLISTFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.shlist)))
-GFXFILES	:=	$(foreach dir,$(GRAPHICS),$(notdir $(wildcard $(dir)/*.t3s)))
-BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
-
-#---------------------------------------------------------------------------------
-# use CXX for linking C++ projects, CC for standard C
-#---------------------------------------------------------------------------------
-ifeq ($(strip $(CPPFILES)),)
-#---------------------------------------------------------------------------------
-	export LD	:=	$(CC)
-#---------------------------------------------------------------------------------
-else
-#---------------------------------------------------------------------------------
-	export LD	:=	$(CXX)
-#---------------------------------------------------------------------------------
-endif
-#---------------------------------------------------------------------------------
-
-#---------------------------------------------------------------------------------
-ifeq ($(GFXBUILD),$(BUILD))
-#---------------------------------------------------------------------------------
-export T3XFILES :=  $(GFXFILES:.t3s=.t3x)
-#---------------------------------------------------------------------------------
-else
-#---------------------------------------------------------------------------------
-export ROMFS_T3XFILES	:=	$(patsubst %.t3s, $(GFXBUILD)/%.t3x, $(GFXFILES))
-export T3XHFILES		:=	$(patsubst %.t3s, $(BUILD)/%.h, $(GFXFILES))
-#---------------------------------------------------------------------------------
-endif
-#---------------------------------------------------------------------------------
-
-export OFILES_SOURCES 	:=	$(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
-
-export OFILES_BIN	:=	$(addsuffix .o,$(BINFILES)) \
-			$(PICAFILES:.v.pica=.shbin.o) $(SHLISTFILES:.shlist=.shbin.o) \
-			$(addsuffix .o,$(T3XFILES))
-
-export OFILES := $(OFILES_BIN) $(OFILES_SOURCES)
-
-export HFILES	:=	$(PICAFILES:.v.pica=_shbin.h) $(SHLISTFILES:.shlist=_shbin.h) \
-			$(addsuffix .h,$(subst .,_,$(BINFILES))) \
-			$(GFXFILES:.t3s=.h)
-
-export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
-			$(foreach dir,$(LIBDIRS),-I$(dir)/include) \
-			-I$(CURDIR)/$(BUILD)
-
-export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
-
-export _3DSXDEPS	:=	$(if $(NO_SMDH),,$(OUTPUT).smdh)
-
-ifeq ($(strip $(ICON)),)
-	icons := $(wildcard *.png)
-	ifneq (,$(findstring $(TARGET).png,$(icons)))
-		export APP_ICON := $(TOPDIR)/$(TARGET).png
-	else
-		ifneq (,$(findstring icon.png,$(icons)))
-			export APP_ICON := $(TOPDIR)/icon.png
-		endif
-	endif
-else
-	export APP_ICON := $(TOPDIR)/$(ICON)
-endif
-
-ifeq ($(strip $(NO_SMDH)),)
-	export _3DSXFLAGS += --smdh=$(CURDIR)/$(TARGET).smdh
-endif
-
-ifneq ($(ROMFS),)
-	export _3DSXFLAGS += --romfs=$(CURDIR)/$(ROMFS)
-endif
-
-.PHONY: all clean
-
-#---------------------------------------------------------------------------------
-all: $(BUILD) $(GFXBUILD) $(DEPSDIR) $(ROMFS_T3XFILES) $(T3XHFILES)
-	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
+clean:
+	rm -fr $(BUILD) $(TARGET).cia $(TARGET).3dsx $(TARGET).elf
 
 $(BUILD):
 	@mkdir -p $@
 
-ifneq ($(GFXBUILD),$(BUILD))
-$(GFXBUILD):
-	@mkdir -p $@
-endif
+$(BUILD)/%.o: %.c
+	@echo [c] $(notdir $<)
+	@$(CC) -MMD -MP -MF $(BUILD)/$*.d $(CPPFLAGS) $(CFLAGS) -c $< -o $@ $(ERROR_FILTER)
 
-ifneq ($(DEPSDIR),$(BUILD))
-$(DEPSDIR):
-	@mkdir -p $@
-endif
+$(BUILD)/%.bin.o	:	$(DATA)/%.bin
+	@echo [bin-embed] $(notdir $<)
+	@bin2s -a 4 -H $(@:.bin.o=_bin.h) $< | awk 1 | arm-none-eabi-as -o $@
 
-#---------------------------------------------------------------------------------
-clean:
-	@echo clean ...
-	@rm -fr $(BUILD) $(TARGET).3dsx $(OUTPUT).smdh $(TARGET).elf $(GFXBUILD)
+%.3dsx: %.elf
+	@echo [3dsx] $(notdir $@)
+	@3dsxtool $< $@ 
 
-#---------------------------------------------------------------------------------
-$(GFXBUILD)/%.t3x	$(BUILD)/%.h	:	%.t3s
-#---------------------------------------------------------------------------------
-	@echo $(notdir $<)
-	@tex3ds -i $< -H $(BUILD)/$*.h -d $(DEPSDIR)/$*.d -o $(GFXBUILD)/$*.t3x
-
-#---------------------------------------------------------------------------------
-else
-
-#---------------------------------------------------------------------------------
-# main targets
-#---------------------------------------------------------------------------------
-$(OUTPUT).3dsx	:	$(OUTPUT).elf $(_3DSXDEPS)
+%.elf:
+	@echo [linking] $(notdir $@)
+	@$(LD) $(LDFLAGS) $(OFILES) $(LIBFLAGS) $(LIBS) -o $@
+	@$(NM) -CSn $@ > $(BUILD)/$(TARGET).lst
 
 $(OFILES_SOURCES) : $(HFILES)
 
-$(OUTPUT).elf	:	$(OFILES)
+$(OUTPUT).elf	: $(BUILD)	$(OFILES)
 
-#---------------------------------------------------------------------------------
-# you need a rule like this for each extension you use as binary data
-#---------------------------------------------------------------------------------
-%.bin.o	%_bin.h :	%.bin
-#---------------------------------------------------------------------------------
-	@echo $(notdir $<)
-	@$(bin2o)
+$(OUTPUT).3dsx	:	$(OUTPUT).elf
 
-#---------------------------------------------------------------------------------
-.PRECIOUS	:	%.t3x %.shbin
-#---------------------------------------------------------------------------------
-%.t3x.o	%_t3x.h :	%.t3x
-#---------------------------------------------------------------------------------
-	$(SILENTMSG) $(notdir $<)
-	$(bin2o)
+$(OUTPUT).cia:	$(OUTPUT).elf 
+	@echo [cia] $(notdir $@) \(v$(APP_VER_MAJ).$(APP_VER_MIN).$(APP_VER_MIC)\)
+	@makerom -f cia -o $(OUTPUT).cia -target t -elf $(OUTPUT).elf -icon $(ROOT_DIR)/cia-rsrc/icon.smdh -banner $(ROOT_DIR)/cia-rsrc/banner.bnr -rsf $(ROOT_DIR)/cia-rsrc/spd11.rsf -ignoresign -v -major $(APP_VER_MAJ) -minor $(APP_VER_MIN) -micro $(APP_VER_MIC)
 
-#---------------------------------------------------------------------------------
-%.shbin.o %_shbin.h : %.shbin
-#---------------------------------------------------------------------------------
-	$(SILENTMSG) $(notdir $<)
-	$(bin2o)
-
--include $(DEPSDIR)/*.d
-
-#---------------------------------------------------------------------------------------
-endif
-#---------------------------------------------------------------------------------------
+-include $(BUILD)/*.d

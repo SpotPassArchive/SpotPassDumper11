@@ -61,7 +61,7 @@ Result disa_extract_partition_a(Handle disa, Handle out_pa, u32 *partition_count
 
 	T(FSFILE_SetSize(out_pa, pa_size), "failed setting output file size");
 
-	printf("Extracting partitionA.bin... (%.02f%%)     ", (float)written / pa_size * 100.0f);
+	printf("Extracting partitionA.bin... (" CONSOLE_YELLOW "%.02f%%" CONSOLE_RESET ")", PERCENTAGE(written, pa_size));
 
 	for (u64 off = 0x9000; off < dpfs->lvl3.size; off += pow2(dpfs->lvl3.log2_blocksize)) {
 		u64 lvl2bitidx = off / pow2(dpfs->lvl3.log2_blocksize);
@@ -82,7 +82,7 @@ Result disa_extract_partition_a(Handle disa, Handle out_pa, u32 *partition_count
 
 		gspWaitForVBlank();
 		gfxSwapBuffers();
-		printf("\rExtracting partitionA.bin: %.02f%%     ", (float)written / pa_size * 100.0f);
+		printf("\rExtracting partitionA.bin... (" CONSOLE_YELLOW "%.02f%%" CONSOLE_RESET ")", PERCENTAGE(written, pa_size));
 	}
 	printf("\n");
 
