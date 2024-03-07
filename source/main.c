@@ -227,6 +227,8 @@ static void handle_existing_dump(bool *should_continue) {
 
 	puts("Uploading existing dump...\n");
 	res = upload_dump(existing);
+	if (res == UL_RES(UCURL_ERROR))
+		printf(CONSOLE_RED "CURL error information:\n%s" CONSOLE_RESET "\n", curl_easy_strerror(upload_get_err()));
 	*should_continue = R_SUCCEEDED(res);
 	T(res, "Failed uploading existing dump");
 	puts("\n========================================");
