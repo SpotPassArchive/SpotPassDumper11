@@ -20,7 +20,7 @@ Result upload_init() {
 	if (R_FAILED(res = socInit(soc_buf, SOC_BUFSIZE)))
 		goto exit0;
 	soc_initialized = true;
-	if (R_FAILED(((curl_res = curl_global_init(CURL_GLOBAL_ALL)) == CURLE_OK) ? 0 : UL_RES(UCURL_ERROR)))
+	if (R_FAILED(((curl_res = curl_global_init(CURL_GLOBAL_ALL)) == CURLE_OK) ? 0 : UL_RES(UCURL_INIT_FAIL)))
 		goto exit1;
 	curl_initialized = true;
 	return 0;
@@ -47,7 +47,7 @@ Result upload_connect() {
 	TRE(acInit(), "Failed initializing AC", err);
 	TRE(ACU_GetStatus(&status), "Failed querying wifi status", err);
 
-	if (status == 3) return 0; // we seem to be connected already
+	if (status == 3) return 0; /* we seem to be connected already */
 
 	TRE(ACU_CreateDefaultConfig(&config), "Failed creating wifi default config", err);
 	TRE(ACU_SetNetworkArea(&config, 2), "Failed setting wifi network area", err);
@@ -56,7 +56,7 @@ Result upload_connect() {
 	TRE(ACU_ConnectAsync(&config, connect_event), "Failed starting wifi connect process", err);
 
 	svcWaitSynchronization(connect_event, UL_CONNECT_TIMEOUT);
-	svcCloseHandle(status); // cleanup
+	svcCloseHandle(status); /* cleanup */
 
 	TR(ACU_GetStatus(&status), "Failed querying wifi status");
 
@@ -68,14 +68,25 @@ err:
 
 CURLcode upload_get_err() { return curl_res; }
 
-
 size_t dummy_cb(char *ptr, size_t size, size_t nmemb, void *userdata) {
-	return nmemb;
+	return nmemb * size;
+}
+
+size_t dl_cb(char *ptr, size_t size, size_t nmemb, void *userdata) {
+	struct download_data *dldata = (struct download_data *)userdata;
+	size_t siz = size * nmemb;
+
+	if (dldata->offset == dldata->size - 1) return nmemb;
+
+	memcpy(&dldata->buffer[dldata->offset], ptr, siz);
+	dldata->offset += siz;
+
+	return siz;
 }
 
 Result upload_conn_test(bool disable_ssl_verify) {
 	CURL *c = curl_easy_init();
-	if (!c) return UL_RES(UCURL_ERROR);
+	if (!c) return UL_RES(UCURL_INIT_FAIL);
 
 	struct curl_blob ca;
 	ca.len = (size_t)cert_bin_size;
@@ -89,7 +100,7 @@ Result upload_conn_test(bool disable_ssl_verify) {
 	curl_easy_setopt(c, CURLOPT_URL, SERVER_URL "/stats/ctr");
 	curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, dummy_cb);
 
-	// should get the error with upload_get_err in case of ssl failures
+	/* should get the error with upload_get_err in case of ssl failures */
 	if ((curl_res = curl_easy_perform(c)) != CURLE_OK)	
 		return UL_RES(UCURL_ERROR);
 
@@ -131,16 +142,27 @@ int prog_cb(void *clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ulto
 
 Result upload_send_partition_a(Handle file, bool disable_ssl_verify) {
 	struct upload_data data;
+	struct download_data dldata;
 	Result res = 0xE7E3FFFF;
 
-	if (R_FAILED(res = FSFILE_GetSize(file, &data.size)))
+	dldata.size = UL_BUFSIZE + 1;
+	dldata.offset = 0;
+	dldata.buffer = (char *)malloc(UL_BUFSIZE + 1);
+	if (!dldata.buffer) return UL_RES(RD_OUT_OF_MEMORY);
+
+	if (R_FAILED(res = FSFILE_GetSize(file, &data.size))) {
+		free(dldata.buffer);
 		return res;
+	}
 
 	data.file = file;
 	data.offset = 0;
 
 	CURL *c = curl_easy_init();
-	if (!c) return UL_RES(UCURL_ERROR);
+	if (!c) {
+		free(dldata.buffer);
+		return UL_RES(UCURL_INIT_FAIL);
+	}
 
 	struct curl_blob ca;
 	ca.len = (size_t)cert_bin_size;
@@ -156,7 +178,8 @@ Result upload_send_partition_a(Handle file, bool disable_ssl_verify) {
 	else
 		curl_easy_setopt(c, CURLOPT_CAINFO_BLOB, &ca);
 	curl_easy_setopt(c, CURLOPT_URL, SERVER_URL "/upload/ctr/partition-a");
-	curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, dummy_cb);
+	curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, dl_cb);
+	curl_easy_setopt(c, CURLOPT_WRITEDATA, &dldata);
 	curl_easy_setopt(c, CURLOPT_POSTFIELDSIZE, (long)data.size);
 	curl_easy_setopt(c, CURLOPT_BUFFERSIZE, UL_BUFSIZE);
 	curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0);
@@ -166,14 +189,24 @@ Result upload_send_partition_a(Handle file, bool disable_ssl_verify) {
 	curl_res = curl_easy_perform(c);
 	putchar('\n');
 
-	if (curl_res != CURLE_OK)
+	if (curl_res != CURLE_OK) {
+		free(dldata.buffer);
 		return R_FAILED(data.read_res) ? data.read_res : UL_RES(UCURL_ERROR);
+	}
 
 	long statuscode;
 
-	if ((curl_res = curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &statuscode)) != CURLE_OK)
+	if ((curl_res = curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &statuscode)) != CURLE_OK) {
+		free(dldata.buffer);
 		return UL_RES(UCURL_ERROR);
+	}
 
+	dldata.buffer[dldata.offset] = 0;
+
+	if (statuscode != 200)
+		printf("Server response (" CONSOLE_MAGENTA "%ld" CONSOLE_RESET "):\n\n" CONSOLE_YELLOW "%s" CONSOLE_RESET "\n", statuscode, dldata.buffer);
+
+	free(dldata.buffer);
 	return statuscode == 200 ? 0 : UL_RES(UL_FAILED);
 }
 

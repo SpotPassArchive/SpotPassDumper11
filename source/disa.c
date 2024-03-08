@@ -24,16 +24,16 @@ Result disa_extract_partition_a(Handle disa, Handle out_pa, u32 *partition_count
 
 	*partition_count = hdr.part_count;
 
-	// partition table = partition descriptor
+	/* partition table = partition descriptor */
 
 	active_tbl = (u8 *)malloc(hdr.tbl_size);
 	u64 active_table_off = hdr.active_tbl ? hdr.sec_tbl_off : hdr.prim_tbl_off;
 
 	T(FSFILE_Read(disa, &read, active_table_off, active_tbl, hdr.tbl_size), "failed reading active partition table");
 
-	// this is for partitionA
+	/* this is for partitionA */
 
-	difi_header *difi = (difi_header *)active_tbl; // need for dpfs and ivfc
+	difi_header *difi = (difi_header *)active_tbl; /* need for dpfs and ivfc */
 
 	u64 dpfs_desc_off = active_table_off + difi->dpfs_desc_off;
 	dpfs_desc = (u8 *)malloc(difi->dpfs_desc_size);
@@ -42,7 +42,7 @@ Result disa_extract_partition_a(Handle disa, Handle out_pa, u32 *partition_count
 
 	dpfs_header *dpfs = (dpfs_header *)dpfs_desc;
 
-	// we can read lvl1 and lvl2 entirely; they shouldn't be that large
+	/* we can read lvl1 and lvl2 entirely; they shouldn't be that large */
 	u64 actual_lv1_off = (hdr.pa_off + dpfs->lvl1.offset) + (difi->dpfs_lvl1_select * dpfs->lvl1.size);
 	u64 actual_lv2_off = hdr.pa_off + dpfs->lvl2.offset;
 

@@ -14,6 +14,7 @@
 #include "cert_bin.h"
 
 enum {
+	UCURL_INIT_FAIL = 0,
 	UCURL_ERROR     = 1,
 	UWIFI_CONN_FAIL = 2,
 	UCONNTEST_FAIL  = 3,
@@ -26,6 +27,12 @@ struct upload_data {
 	u64 size;
 	Result read_res;
 	Handle file;
+};
+
+struct download_data {
+	char *buffer;
+	u32 size;
+	u32 offset;
 };
 
 #define UL_RES(val) MAKERESULT(RL_PERMANENT,RS_INVALIDSTATE,RM_APPLICATION,val)

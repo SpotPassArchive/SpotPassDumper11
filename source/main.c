@@ -13,7 +13,8 @@
 #define T(x,msg) TRE((x), msg, exit);
 
 /* 40 chars max to fit on bottom screen */
-#define UPLOAD_URL "https://spotpassarchive.github.io/upload"
+#define SITE_URL "https://spotpassarchive.github.io"
+#define UPLOAD_URL SITE_URL "/upload"
 #define DISCORD_URL "https://discord.gg/wxCEY8MHvh"
 #define DUMP_OUTPATH "/spotpass_cache"
 #define FILE_COPY_BUFSIZE 0x10000
@@ -142,7 +143,7 @@ static void dump_and_upload(bool *warn_user) {
 	if (ents) { free(ents); ents = NULL; }
 
 	if (!found_id0) {
-		puts("Could not find ID0 on NAND."); // this should never happen
+		puts("Could not find ID0 on NAND."); /* this should never happen */
 		goto exit;
 	}
 
@@ -176,7 +177,7 @@ static void dump_and_upload(bool *warn_user) {
 			CONSOLE_RESET "\n\n");
 	}
 
-	// try uploading the file
+	/* try uploading the file */
 	puts("Attempting to upload dump...");
 
 	if (R_FAILED(res = upload_dump(out_pa))) {
@@ -271,20 +272,50 @@ exit:
 static void print_warn_user() {
 	puts(CONSOLE_YELLOW "Warning: Failed uploading dump(s).\n"
 		"Please upload all partitionA files in\n"
-		CONSOLE_MAGENTA "sd:" DUMP_OUTPATH CONSOLE_RESET
+		CONSOLE_MAGENTA "sd:" DUMP_OUTPATH CONSOLE_YELLOW
 		" manually here:" CONSOLE_GREEN "\n"
 		UPLOAD_URL CONSOLE_RESET "\n\n");
 }
 
 int main(int argc, char* argv[])
 {
-	fsInit();
 	gfxInitDefault();
 	consoleInit(GFX_BOTTOM, NULL);
+
+	/* CFW check */
+
+	Handle hbldr = 0;
+	if R_FAILED(svcConnectToPort(&hbldr, "hb:ldr")) {
+		puts(CONSOLE_RED "Luma3DS CFW is required to use this\n"
+			"application. Emulators and stock\n"
+			"firmware are not supported.\n\n" CONSOLE_GREEN
+			"To dump your data on a stock system,\n"
+			"go to the following website and use\n"
+			"the " CONSOLE_CYAN "'No CFW'" CONSOLE_GREEN
+			" guide corresponding\n"
+			"to your system:\n\n" CONSOLE_MAGENTA
+			SITE_URL CONSOLE_RESET "\n");
+
+		goto exit;
+	}
+	svcCloseHandle(hbldr);
 
 	bool warn_user_existing = false;
 	bool warn_user_current = false;
 	time_t existing_timestamp = 0;
+	Result res = 0xE7E3FFFF;
+
+	fsInit();
+	aptInit();
+	ndmuInit();
+
+	/* disable HOME button & sleep mode & make sleep mode not break wifi */
+
+	aptSetSleepAllowed(false);
+	aptSetHomeAllowed(false);
+
+	T(NDMU_EnterExclusiveState(NDM_EXCLUSIVE_STATE_INFRASTRUCTURE), "Failed entering NDM exclusive state");
+	T(NDMU_LockState(), "Failed locking NDM state");
 
 	if (!handle_existing_dump(&warn_user_existing, &existing_timestamp)) {
 		/* something is very wrong */
@@ -309,6 +340,11 @@ int main(int argc, char* argv[])
 	}
 
 exit:
+	/* unlock NDM state, sleep mode and home button */
+	NDMU_UnlockState();
+	NDMU_LeaveExclusiveState();
+	aptSetHomeAllowed(true);
+	aptSetSleepAllowed(true);
 	puts("\n\nPress START to exit.");
 
 	while (aptMainLoop())
@@ -324,6 +360,8 @@ exit:
 
 	gfxExit();
 	fsExit();
+	ndmuExit();
+	aptExit();
 	return 0;
 }
 
