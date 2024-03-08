@@ -59,7 +59,6 @@ Result disa_extract_partition_a(Handle disa, Handle out_pa, u32 *partition_count
 	u64 pa_size = dpfs->lvl3.size - 0x9000;
 	u64 written = 0;
 
-	T(FSFILE_SetSize(out_pa, pa_size), "failed setting output file size");
 
 	printf("Extracting partitionA.bin... (" CONSOLE_YELLOW "%.02f%%" CONSOLE_RESET ")", PERCENTAGE(written, pa_size));
 
@@ -79,6 +78,7 @@ Result disa_extract_partition_a(Handle disa, Handle out_pa, u32 *partition_count
 		T(FSFILE_Write(out_pa, &read, off - 0x9000, buf, pow2(dpfs->lvl3.log2_blocksize), FS_WRITE_FLUSH), "\nfailed writing DISA lv3 data chunk");
 
 		written += read;
+		T(FSFILE_SetSize(out_pa, written), "failed setting output file size");
 
 		gspWaitForVBlank();
 		gfxSwapBuffers();

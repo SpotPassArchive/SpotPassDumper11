@@ -1,9 +1,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <3ds.h>
-
 #include <malloc.h>
+#include <time.h>
+
+#include <3ds.h>
 
 #include <disa.h>
 #include <upload.h>
@@ -11,6 +12,9 @@
 
 #define T(x,msg) TRE((x), msg, exit);
 
+/* 40 chars max to fit on bottom screen */
+#define UPLOAD_URL "https://spotpassarchive.github.io/upload"
+#define DISCORD_URL "https://discord.gg/wxCEY8MHvh"
 #define DUMP_OUTPATH "/spotpass_cache"
 #define FILE_COPY_BUFSIZE 0x10000
 
@@ -76,7 +80,6 @@ static Result read_dir(Handle dir, FS_DirectoryEntry **ents, int max_count, u32 
 	return FSDIR_Read(dir, read, max_count, *ents);
 }
 
-
 static Result upload_dump(Handle file) {
 	Result res = 0xE7E3FFFF;
 
@@ -98,7 +101,7 @@ exit:
 	return res;
 }
 
-static void dump_and_upload() {
+static void dump_and_upload(bool *warn_user) {
 	bool found_id0 = false;
 	char buf[65];
 
@@ -156,15 +159,6 @@ static void dump_and_upload() {
 	puts("\n" CONSOLE_GREEN "Copied successfully." CONSOLE_RESET "\n");
 	puts("File dumped to:\n" CONSOLE_CYAN "sd:" DUMP_OUTPATH "/partitionA.bin" CONSOLE_RESET "\n");
 
-	// try uploading the file
-	puts("Attempting to upload dump...");
-
-	if (R_FAILED(upload_dump(out_pa))) {
-		puts("\n" CONSOLE_RED "Failed uploading file. Please upload it\nyourself using the website." CONSOLE_RESET "\n\n");
-		if (res == UL_RES(UCURL_ERROR))
-			printf(CONSOLE_RED "CURL error information:\n%s" CONSOLE_RESET "\n", curl_easy_strerror(upload_get_err()));
-	}
-
 	if (part_count > 1) {
 		puts("\n" CONSOLE_YELLOW "You have partitionB!" CONSOLE_RESET "\n");
 
@@ -178,8 +172,18 @@ static void dump_and_upload() {
 			"Having partitionB is rare. Please get\n"
 			"in touch with us on Discord so that we\n"
 			"can analyze your data further:\n\n"
-			CONSOLE_CYAN "https://discord.gg/wxCEY8MHvh"
+			CONSOLE_CYAN DISCORD_URL
 			CONSOLE_RESET "\n\n");
+	}
+
+	// try uploading the file
+	puts("Attempting to upload dump...");
+
+	if (R_FAILED(res = upload_dump(out_pa))) {
+		puts("\n" CONSOLE_RED "Failed uploading file." CONSOLE_RESET "\n");
+		if (res == UL_RES(UCURL_ERROR))
+			printf(CONSOLE_RED "CURL error information:\n%s" CONSOLE_RESET "\n", curl_easy_strerror(upload_get_err()));
+		*warn_user = true;
 	}
 
 	FSFILE_Close(disa_file);
@@ -201,27 +205,29 @@ exit:
 	if (sdmc) FSUSER_CloseArchive(sdmc);
 }
 
-static void handle_existing_dump(bool *should_continue) {
+static bool handle_existing_dump(bool *warn_user, time_t *existing_timestamp) {
 	Result res = 0xE7E3FFFF;
+	char baknamebuf[64];
 	Handle existing = 0;
+	FS_Archive sdmc = 0;
 	u64 file_size = 0;
 	u32 read = 0;
 
 	if (R_FAILED(res = FSUSER_OpenFileDirectly(&existing, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, ""), fsMakePath(PATH_ASCII, DUMP_OUTPATH "/partitionA.bin"), FS_OPEN_READ, 0))) {
-		*should_continue = true;
+		*warn_user = false;
 		goto exit; /* no existing file */
 	}
 
 	T(FSFILE_GetSize(existing, &file_size), "Failed getting size of existing\ndump");
 	if (file_size != PARTITIONA_SIZE) {
-		*should_continue = true;
+		*warn_user = false;
 		goto exit; /* the file is not the correct size */
 	}
 
 	char magic[4];
 	T(FSFILE_Read(existing, &read, 0, magic, 4), "Failed reading magic from\nexisting dump");
 	if (memcmp(magic, "SAVE", 4) != 0) {
-		*should_continue = true;
+		*warn_user = false;
 		goto exit; /* the file does not have the correct magic */
 	}
 
@@ -229,11 +235,45 @@ static void handle_existing_dump(bool *should_continue) {
 	res = upload_dump(existing);
 	if (res == UL_RES(UCURL_ERROR))
 		printf(CONSOLE_RED "CURL error information:\n%s" CONSOLE_RESET "\n", curl_easy_strerror(upload_get_err()));
-	*should_continue = R_SUCCEEDED(res);
-	T(res, "Failed uploading existing dump");
+	*warn_user = R_FAILED(res);
+	TRE(res, "Failed uploading existing dump", ren_exit);
 	puts("\n========================================");
 exit:
 	if (existing) FSFILE_Close(existing);
+	return true;
+ren_exit:
+	if (existing) FSFILE_Close(existing);
+	/* rename the file to partitionA_{timestamp}.bin */
+	time_t t = time(NULL);
+	snprintf(baknamebuf, sizeof(baknamebuf), DUMP_OUTPATH "/partitionA_%lld.bin", t);
+	TRE(mount_media(&sdmc, ARCHIVE_SDMC), "Failed mounting SDMC archive", ren_err_exit);
+	TRE(FSUSER_RenameFile(sdmc, fsMakePath(PATH_ASCII, DUMP_OUTPATH "/partitionA.bin"), sdmc, fsMakePath(PATH_ASCII, baknamebuf)), "Failed renaming to backup name\n", ren_err_exit);
+	printf("Renamed existing file to:\n" CONSOLE_CYAN "sd:%s" CONSOLE_RESET "\n", baknamebuf);
+	*existing_timestamp = t;
+ren_err_exit:
+	if (sdmc) FSUSER_CloseArchive(sdmc);
+	return R_SUCCEEDED(res);
+}
+
+bool retry_upload_existing(time_t existing_timestamp) {
+	Result res = 0xE7E3FFFF;
+	Handle existing = 0;
+	char baknamebuf[64];
+
+	snprintf(baknamebuf, sizeof(baknamebuf), DUMP_OUTPATH "/partitionA_%lld.bin", existing_timestamp);
+	T(FSUSER_OpenFileDirectly(&existing, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, ""), fsMakePath(PATH_ASCII, baknamebuf), FS_OPEN_READ,0), "Failed opening existing backup file");
+	T(upload_dump(existing), "Failed uploading existing backup file");
+exit:
+	if (existing) FSFILE_Close(existing);
+	return R_SUCCEEDED(res);
+}
+
+static void print_warn_user() {
+	puts(CONSOLE_YELLOW "Warning: Failed uploading dump(s).\n"
+		"Please upload all partitionA files in\n"
+		CONSOLE_MAGENTA "sd:" DUMP_OUTPATH CONSOLE_RESET
+		" manually here:" CONSOLE_GREEN "\n"
+		UPLOAD_URL CONSOLE_RESET "\n\n");
 }
 
 int main(int argc, char* argv[])
@@ -242,14 +282,33 @@ int main(int argc, char* argv[])
 	gfxInitDefault();
 	consoleInit(GFX_BOTTOM, NULL);
 
-	bool should_continue = false;
-	handle_existing_dump(&should_continue);
+	bool warn_user_existing = false;
+	bool warn_user_current = false;
+	time_t existing_timestamp = 0;
 
-	if (!should_continue)
-		puts(CONSOLE_YELLOW "Failed processing existing dump.\nWill not continue." CONSOLE_RESET);
-	else 
-		dump_and_upload();
-	
+	if (!handle_existing_dump(&warn_user_existing, &existing_timestamp)) {
+		/* something is very wrong */
+		puts(CONSOLE_RED "Failed handling existing dump.\n"
+			"Please contact us on Discord so we can\n"
+			"Find out what went wrong:\n" CONSOLE_CYAN
+			DISCORD_URL CONSOLE_RESET "\n");
+		goto exit;
+	}
+
+	dump_and_upload(&warn_user_current);
+
+	if (warn_user_current) { /* current failed upload */
+		print_warn_user();
+		goto exit;
+	}
+
+	if (warn_user_existing) { /* existing failed upload but current did not */
+		puts("Attempting to upload the existing\nfile again...");
+		if (!retry_upload_existing(existing_timestamp))
+			print_warn_user();
+	}
+
+exit:
 	puts("\n\nPress START to exit.");
 
 	while (aptMainLoop())

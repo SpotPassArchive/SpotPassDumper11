@@ -81,7 +81,7 @@ $(BUILD)/%.bin.o	:	$(DATA)/%.bin
 
 %.3dsx: %.elf
 	@echo [3dsx] $(notdir $@)
-	@3dsxtool $< $@ 
+	@3dsxtool --smdh=$(ROOT_DIR)/cia-rsrc/icon.smdh  $< $@ 
 
 %.elf:
 	@echo [linking] $(notdir $@)
