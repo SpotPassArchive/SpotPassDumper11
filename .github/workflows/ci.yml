@@ -14,7 +14,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install p7zip-full -y
-          curl -L https://github.com/3DSGuy/Project_CTR/releases/download/makerom-v0.18.4/makerom-v0.18.4-ubuntu_x86_64.zip
+          curl -L https://github.com/3DSGuy/Project_CTR/releases/download/makerom-v0.18.4/makerom-v0.18.4-ubuntu_x86_64.zip -o makerom-v0.18.4-ubuntu_x86_64.zip
           sudo 7z e makerom-v0.18.4-ubuntu_x86_64.zip
           sudo chmod +x makerom
           mv makerom /usr/local/bin
@@ -22,8 +22,7 @@ jobs:
 
       - name: Build Project
         run: |
-          make
-          make cia
+          make all cia
 
       - uses: actions/upload-artifact@v4
         with:
