@@ -1,3 +1,5 @@
+# NOTICE: This tool has been discontinued as of the closure of the 3DS online services.
+
 # SpotPassDumper11
 
 Extracts the raw DISA save image for the `boss` (SpotPass) module.
